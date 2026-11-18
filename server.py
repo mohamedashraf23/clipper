@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from clipper import config, ff, pipeline
+from clipper import config, ff, live, pipeline
 
 for _stream in (sys.stdout, sys.stderr):  # print non-English titles/transcripts without crashing
     try:
@@ -114,6 +114,66 @@ def rerun(job_id: str, settings: dict = Body(default_factory=dict)):
     except FileNotFoundError as e:
         raise HTTPException(410, f"Can't re-run: {e}")
     return {"id": job.id}
+
+
+# ---- live streams -----------------------------------------------------------
+@app.post("/api/live")
+def live_start(body: dict = Body(...)):
+    """Start watching a live stream: {"url": "https://twitch.tv/...", "settings": {...}}"""
+    url = str(body.get("url", "")).strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(400, "Paste the stream's link, starting with https://")
+    try:
+        sess = live.start(url, body.get("settings") or {})
+    except live.LiveError as e:
+        raise HTTPException(409, str(e))
+    return {"id": sess.id}
+
+
+@app.get("/api/live")
+def live_list():
+    return live.list_sessions()
+
+
+@app.get("/api/live/{session_id}")
+def live_state(session_id: str):
+    st = live.public_state(session_id)
+    if not st:
+        raise HTTPException(404, "No such live session")
+    return st
+
+
+@app.post("/api/live/{session_id}/clip")
+def live_clip(session_id: str, body: dict = Body(default_factory=dict)):
+    """The 'Clip that' button: the last N seconds ({"seconds": 45}; default from the session settings)."""
+    sess = live.get(session_id)
+    if not sess or sess.state["status"] not in ("connecting", "recording"):
+        raise HTTPException(409, "That session isn't recording")
+    try:
+        clip = sess.clip_last(body.get("seconds"))
+    except live.LiveError as e:
+        raise HTTPException(409, str(e))
+    return {"clip": clip["index"]}
+
+
+@app.post("/api/live/{session_id}/stop")
+def live_stop(session_id: str):
+    sess = live.get(session_id)
+    if not sess:
+        raise HTTPException(404, "No such live session")
+    sess.stop()
+    return {"stopped": session_id}
+
+
+@app.delete("/api/live/{session_id}")
+def live_delete(session_id: str):
+    if not live.public_state(session_id):
+        raise HTTPException(404, "No such live session")
+    try:
+        live.delete(session_id)
+    except live.LiveError as e:
+        raise HTTPException(409, str(e))
+    return {"deleted": session_id}
 
 
 @app.post("/api/jobs/{job_id}/clips/{index}/trim")

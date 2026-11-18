@@ -1,10 +1,10 @@
 "use client";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  ArrowClockwise, CaretDown, FilmStrip, LinkSimple, MusicNotes, Scissors, Subtitles, TextT, Timer, UploadSimple, WarningCircle,
+  ArrowClockwise, Broadcast, CaretDown, Lightning, FilmStrip, LinkSimple, MusicNotes, Scissors, Subtitles, TextT, Timer, UploadSimple, WarningCircle,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { Health, Settings } from "@/lib/api";
+import type { Health, LiveSettings, Settings } from "@/lib/api";
 import { fast, riseIn, stagger } from "@/lib/motion";
 import { InlineError, Segmented, Toggle } from "./controls";
 
@@ -16,13 +16,19 @@ const ASPECTS = [
 
 type Source = { url?: string; file?: File };
 
-export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
+export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun, onStartLive, liveRunning }: {
   health: Health | null | "offline"; onSubmit: (s: Settings, src: Source) => Promise<void>;
   /** the open job, when it can be re-run with the settings below */
   rerunTarget?: { id: string; title: string } | null;
   onRerun?: (id: string, s: Settings) => Promise<void>;
+  onStartLive?: (url: string, s: LiveSettings) => Promise<void>;
+  liveRunning?: boolean;
 }) {
-  const [mode, setMode] = useState<"url" | "file">("url");
+  const [mode, setMode] = useState<"url" | "file" | "live">("url");
+  const [liveUrl, setLiveUrl] = useState("");
+  const [clipSeconds, setClipSeconds] = useState(45);
+  const [autoClips, setAutoClips] = useState(true);
+  const live = mode === "live";
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [over, setOver] = useState(false);
@@ -84,6 +90,17 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(""); setInvalid(null);
+    if (live) {
+      if (!liveUrl.trim()) return fail("Paste the live stream's link first.", "url");
+      if (!/^https?:\/\//i.test(liveUrl.trim())) return fail("The link should start with https://", "url");
+      if (!aspects.length) return fail("Pick at least one aspect ratio.");
+      setBusy(true);
+      try {
+        await onStartLive?.(liveUrl.trim(), { clip_seconds: clipSeconds, auto_clips: autoClips, aspects, framing, facecam,
+                                             captions, hook_text: hook, caption_style: style });
+      } catch (err) { serverError(err); } finally { setBusy(false); }
+      return;
+    }
     if (mode === "url") {
       if (!url.trim()) return fail("Paste a video link first.", "url");
       if (!/^https?:\/\//i.test(url.trim())) return fail("The link should start with https://", "url");
@@ -111,11 +128,19 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
       <motion.section className="group" variants={riseIn} aria-labelledby="g1">
         <h2 className="group-h title-3" id="g1"><span className="n caption-3">1</span>Source</h2>
         <Segmented id="src" label="Video source" value={mode} onChange={setMode} options={[
-          { value: "url", label: "Video link", icon: <LinkSimple size={16} /> },
-          { value: "file", label: "Upload file", icon: <UploadSimple size={16} /> },
+          { value: "url", label: "Link", icon: <LinkSimple size={16} /> },
+          { value: "file", label: "Upload", icon: <UploadSimple size={16} /> },
+          { value: "live", label: "Live", icon: <Broadcast size={16} /> },
         ]} />
         <AnimatePresence mode="wait" initial={false}>
-          {mode === "url" ? (
+          {live ? (
+            <motion.div key="live" className="field" initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }} transition={fast}>
+              <label htmlFor="liveurl" className="body-6">Paste a Twitch, YouTube Live or Kick link</label>
+              <input ref={urlRef} id="liveurl" type="text" className={`body-6 ${invalid === "url" ? "invalid" : ""}`} value={liveUrl}
+                     onChange={(e) => setLiveUrl(e.target.value)} placeholder="https://www.twitch.tv/channel" autoComplete="off" spellCheck={false} />
+              <p className="caption-5 muted">Clipper records the stream while it runs and keeps the last 30 minutes, so you can clip moments that just happened.</p>
+            </motion.div>
+          ) : mode === "url" ? (
             <motion.div key="url" className="field" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 12 }} transition={fast}>
               <label htmlFor="url" className="body-6">Paste a YouTube or video page link</label>
               <input ref={urlRef} id="url" type="text" className={`body-6 ${invalid === "url" ? "invalid" : ""}`} value={url}
@@ -133,16 +158,32 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
             </motion.label>
           )}
         </AnimatePresence>
-        <div className="field">
+        {!live && <div className="field">
           <label htmlFor="content" className="body-6">Content type</label>
           <select id="content" className="body-6" value={content} onChange={(e) => setContent(e.target.value)}>
             <option value="auto">Detect from the video</option>
             <option value="talk">Talking: podcast, interview, vlog</option>
             <option value="gameplay">Gameplay: pick by action, not words</option>
           </select>
-        </div>
+        </div>}
       </motion.section>
 
+      {live && (
+      <motion.section className="group" variants={riseIn} initial="hidden" animate="show" aria-labelledby="g2l">
+        <h2 className="group-h title-3" id="g2l"><span className="n caption-3">2</span>Live clips</h2>
+        <div className="field">
+          <label htmlFor="cliplen" className="body-6">Clip length</label>
+          <select id="cliplen" className="body-6" value={clipSeconds} onChange={(e) => setClipSeconds(+e.target.value)}>
+            {[30, 45, 60, 90].map((s) => <option key={s} value={s}>{s} seconds</option>)}
+          </select>
+        </div>
+        <div className="toggles">
+          <Toggle checked={autoClips} onChange={setAutoClips} icon={<Lightning size={16} />}>Auto clip big moments</Toggle>
+        </div>
+        <p className="caption-5 muted">Auto clips start after 90 seconds, once Clipper knows what normal looks like for this stream, and come at most every 2 minutes.</p>
+      </motion.section>
+      )}
+      {!live && (
       <motion.section className="group" variants={riseIn} aria-labelledby="g2">
         <h2 className="group-h title-3" id="g2"><span className="n caption-3">2</span>Clips</h2>
         <div className="field">
@@ -158,6 +199,7 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
             <input type="number" id="maxlen" className="body-6 mono" min={10} max={180} value={maxLen} onChange={(e) => setMaxLen(+e.target.value)} /></div>
         </div>
       </motion.section>
+      )}
 
       <motion.section className="group" variants={riseIn} aria-labelledby="g3">
         <h2 className="group-h title-3" id="g3"><span className="n caption-3">3</span>Format</h2>
@@ -212,22 +254,22 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
         <div className="toggles">
           <Toggle checked={captions} onChange={setCaptions} icon={<Subtitles size={16} />}>Animated captions</Toggle>
           <Toggle checked={hook} onChange={setHook} icon={<TextT size={16} />}>Hook title, first 3 sec</Toggle>
-          <Toggle checked={music} onChange={setMusic} icon={<MusicNotes size={16} />}>AI music</Toggle>
-          <Toggle checked={tighten} onChange={setTighten} icon={<Timer size={16} />}>Cut pauses and filler words</Toggle>
+          {!live && <Toggle checked={music} onChange={setMusic} icon={<MusicNotes size={16} />}>AI music</Toggle>}
+          {!live && <Toggle checked={tighten} onChange={setTighten} icon={<Timer size={16} />}>Cut pauses and filler words</Toggle>}
         </div>
-        <p className="caption-5 muted">Jump cuts apply to talking videos. Gameplay keeps its pauses.</p>
+        <p className="caption-5 muted">{live ? "Live clips keep the stream's own audio, with no added music." : "Jump cuts apply to talking videos. Gameplay keeps its pauses."}</p>
         <div className="row">
           <div className="field"><label htmlFor="style" className="body-6">Caption style</label>
             <select id="style" className="body-6" value={style} onChange={(e) => setStyle(e.target.value)}>
               <option value="bold">Bold yellow</option><option value="clean">Clean green</option><option value="fire">Impact orange</option>
             </select></div>
-          <div className="field"><label htmlFor="zoom" className="body-6">Zoom</label>
+          {!live && <div className="field"><label htmlFor="zoom" className="body-6">Zoom</label>
             <select id="zoom" className="body-6" value={zoom} onChange={(e) => setZoom(e.target.value)}>
               <option value="punch">Punch in</option><option value="slow">Slow push</option><option value="none">None</option>
-            </select></div>
+            </select></div>}
         </div>
         <AnimatePresence initial={false}>
-          {music && (
+          {music && !live && (
             <motion.div className="field" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={fast}>
               <label htmlFor="musicsrc" className="body-6">Music source</label>
               <select id="musicsrc" className="body-6" value={musicSource} onChange={(e) => setMusicSource(e.target.value as "ai" | "folder")}>
@@ -244,13 +286,13 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
             </motion.div>
           )}
         </AnimatePresence>
-        <div className="field">
+        {!live && <div className="field">
           <label className="lbl body-6" htmlFor="vol">Music volume <b className="body-4">{vol}%</b></label>
           <input type="range" id="vol" min={5} max={80} value={vol} disabled={!music} onChange={(e) => setVol(+e.target.value)} />
-        </div>
+        </div>}
       </motion.section>
 
-      <motion.section className="group" variants={riseIn} aria-labelledby="g5">
+      {!live && <motion.section className="group" variants={riseIn} aria-labelledby="g5">
         <h2 className="group-h title-3" id="g5"><span className="n caption-3">5</span>AI engines</h2>
         <div className="field">
           <label htmlFor="picker" className="body-6">Who picks the clips</label>
@@ -277,20 +319,20 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
             <p className="caption-5 muted">Bigger models are more accurate and slower. Small is a good balance on a 6 GB GPU.</p>
           </div>
         </details>
-      </motion.section>
+      </motion.section>}
 
-      <motion.button type="submit" className="btn-primary button-md" disabled={busy} variants={riseIn}
+      <motion.button type="submit" className="btn-primary button-md" disabled={busy || (live && liveRunning)} variants={riseIn}
                      whileHover={{ y: -1 }} whileTap={{ scale: 0.98 }}>
         <motion.span className="shine" initial={{ x: "-150%" }} animate={{ x: "450%" }}
                      transition={{ duration: 1.4, ease: [0.22, 1, 0.36, 1], repeat: Infinity, repeatDelay: 3.5 }} />
         <motion.span animate={busy ? { rotate: [0, -18, 18, 0] } : { rotate: 0 }}
                      transition={busy ? { duration: 0.8, repeat: Infinity, ease: [0.22, 1, 0.36, 1] } : { duration: 0.3 }} style={{ display: "inline-flex" }}>
-          <Scissors size={18} weight="bold" />
+          {live ? <Broadcast size={18} weight="bold" /> : <Scissors size={18} weight="bold" />}
         </motion.span>
-        <span>{busy ? (mode === "file" ? "Uploading" : "Starting") : "Make clips"}</span>
+        <span>{busy ? (mode === "file" ? "Uploading" : live ? "Connecting" : "Starting") : live ? (liveRunning ? "A live session is running" : "Start watching") : "Make clips"}</span>
       </motion.button>
       <AnimatePresence>
-        {rerunTarget && (
+        {rerunTarget && !live && (
           <motion.button key="rerun" type="button" className="btn btn-secondary button-sm" onClick={rerun} disabled={rerunBusy}
                          initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
                          whileHover={{ y: -1 }} whileTap={{ scale: 0.98 }} transition={fast}

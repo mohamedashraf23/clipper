@@ -6,8 +6,17 @@ import { EmptyState } from "@/components/EmptyState";
 import { Header } from "@/components/Header";
 import { History } from "@/components/History";
 import { JobView } from "@/components/JobView";
+import { LivePanel } from "@/components/LivePanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
-import { api, type Health, type JobState, type JobSummary, type Settings } from "@/lib/api";
+import { api, type Health, type JobState, type JobSummary, type LiveSettings, type LiveState, type LiveSummary, type Settings } from "@/lib/api";
+
+const isLive = (id: string | null) => !!id && id.startsWith("live-");
+const LIVE_AS_JOB: Record<string, JobSummary["status"]> = { connecting: "running", recording: "running", stopped: "done", ended: "done", error: "error" };
+/** History shows live sessions next to normal jobs. */
+const liveRow = (l: LiveSummary): JobSummary => ({
+  id: l.id, title: `● ${l.title || "Live stream"}`, source: l.url, status: LIVE_AS_JOB[l.status] ?? "done",
+  progress: 0, message: "", created: l.started, clips: l.clips,
+});
 import { fast, stagger } from "@/lib/motion";
 
 export default function Page() {
@@ -15,10 +24,13 @@ export default function Page() {
   const [jobs, setJobs] = useState<JobSummary[] | null | "error">(null);
   const [current, setCurrent] = useState<string | null>(null);
   const [job, setJob] = useState<JobState | null>(null);
+  const [live, setLive] = useState<LiveState | null>(null);
   const [pollKey, setPollKey] = useState(0); // bump to start polling again (a trim re-renders inside the same job)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const loadJobs = useCallback(() => api.jobs().then(setJobs).catch(() => setJobs("error")), []);
+  const loadJobs = useCallback(() => Promise.all([api.jobs(), api.live.list().catch(() => [] as LiveSummary[])])
+    .then(([j, l]) => setJobs([...l.map(liveRow), ...j].sort((a, b) => b.created - a.created)))
+    .catch(() => setJobs("error")), []);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth("offline"));
@@ -31,6 +43,15 @@ export default function Page() {
     let alive = true;
     const tick = async () => {
       try {
+        if (isLive(current)) {
+          const ls = await api.live.get(current);
+          if (!alive) return;
+          setLive(ls);
+          const busy = ls.status === "recording" || ls.status === "connecting" ||
+                       ls.clips.some((c) => c.status === "queued" || c.status === "rendering");
+          if (busy) timer.current = setTimeout(tick, 2000); else loadJobs();
+          return;
+        }
         const st = await api.job(current);
         if (!alive) return;
         setJob(st);
@@ -44,7 +65,25 @@ export default function Page() {
     return () => { alive = false; clearTimeout(timer.current); };
   }, [current, loadJobs, pollKey]);
 
-  const open = (id: string) => { if (id !== current) { setJob(null); setCurrent(id); } };
+  const open = (id: string) => { if (id !== current) { setJob(null); setLive(null); setCurrent(id); } };
+
+  async function startLive(url: string, settings: LiveSettings) {
+    const { id } = await api.live.start(url, settings);
+    open(id);
+    loadJobs();
+  }
+  async function clipLive(seconds: number) {
+    if (!live) return;
+    await api.live.clip(live.id, seconds);
+    setPollKey((k) => k + 1);
+  }
+  async function stopLive() {
+    if (!live) return;
+    await api.live.stop(live.id);
+    setPollKey((k) => k + 1);
+    loadJobs();
+  }
+  const liveRunning = Array.isArray(jobs) && jobs.some((j) => isLive(j.id) && j.status === "running");
 
   async function create(settings: Settings, src: { url?: string; file?: File }) {
     const { id } = await api.create(settings, src);
@@ -76,8 +115,8 @@ export default function Page() {
     ? { id: job.id, title: job.title || job.origin || job.source } : null;
 
   async function remove(id: string) {
-    await api.remove(id).catch(() => undefined);
-    if (id === current) { setCurrent(null); setJob(null); }
+    await (isLive(id) ? api.live.remove(id) : api.remove(id)).catch(() => undefined);
+    if (id === current) { setCurrent(null); setJob(null); setLive(null); }
     loadJobs();
   }
 
@@ -87,14 +126,17 @@ export default function Page() {
       <Header health={health} />
       <main className="layout">
         <aside className="side">
-          <SettingsPanel health={health} onSubmit={create} rerunTarget={rerunTarget} onRerun={rerun} />
+          <SettingsPanel health={health} onSubmit={create} rerunTarget={rerunTarget} onRerun={rerun}
+                         onStartLive={startLive} liveRunning={liveRunning} />
           <History jobs={jobs} current={current} onOpen={open} onDelete={remove} />
         </aside>
         <section id="workspace" tabIndex={-1} aria-live="polite">
           <AnimatePresence mode="wait">
             {current ? (
               <motion.div key={current} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: fast }}>
-                {job ? (
+                {isLive(current) ? (live ? <LivePanel live={live} onClip={clipLive} onStop={stopLive} /> : (
+                  <div className="panel"><div className="skel line" style={{ width: "40%" }} /></div>
+                )) : job ? (
                   <>
                     <JobView job={job} onCancel={cancel} />
                     <motion.div className="grid" variants={stagger(0.08)} initial="hidden" animate="show">

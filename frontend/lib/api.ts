@@ -43,6 +43,23 @@ export interface Settings {
   tighten: boolean; music_source: "ai" | "folder"; music_dir: string;
 }
 
+export interface LiveSettings {
+  clip_seconds: number; auto_clips: boolean; aspects: string[]; framing: string; facecam: string;
+  captions: boolean; hook_text: boolean; caption_style: string;
+}
+export type LiveStatus = "connecting" | "recording" | "stopped" | "ended" | "error";
+export interface LiveClip extends Omit<Clip, "status"> {
+  reason: "auto" | "button"; peak: number; status: "queued" | "rendering" | "done" | "error"; error?: string;
+}
+export interface LiveState {
+  id: string; kind: "live"; url: string; title: string; channel?: string; status: LiveStatus; message: string;
+  started: number; finished: number | null; buffered: number; recorded: number; intensity: number[];
+  clips: LiveClip[]; log: string[]; error: string | null; settings: LiveSettings;
+}
+export interface LiveSummary {
+  id: string; title: string; url: string; status: LiveStatus; started: number; recorded: number; clips: number;
+}
+
 async function json<T>(res: Response): Promise<T> {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body as { detail?: string }).detail || `The server answered ${res.status}.`);
@@ -61,6 +78,18 @@ export const api = {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start, end }),
   }).then(json<{ id: string; clip: number }>),
   remove: (id: string) => fetch(`${API_BASE}/api/jobs/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
+  live: {
+    start: (url: string, settings: LiveSettings) => fetch(`${API_BASE}/api/live`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, settings }),
+    }).then(json<{ id: string }>),
+    list: () => fetch(`${API_BASE}/api/live`).then(json<LiveSummary[]>),
+    get: (id: string) => fetch(`${API_BASE}/api/live/${id}`).then(json<LiveState>),
+    clip: (id: string, seconds?: number) => fetch(`${API_BASE}/api/live/${id}/clip`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(seconds ? { seconds } : {}),
+    }).then(json<{ clip: number }>),
+    stop: (id: string) => fetch(`${API_BASE}/api/live/${id}/stop`, { method: "POST" }).then(json<{ stopped: string }>),
+    remove: (id: string) => fetch(`${API_BASE}/api/live/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
+  },
   create: (settings: Settings, source: { url?: string; file?: File }) => {
     const fd = new FormData();
     fd.append("settings", JSON.stringify(settings));

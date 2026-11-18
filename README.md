@@ -7,7 +7,7 @@
 
 Paste a YouTube link or drop an MP4. Clipper transcribes it, picks the strongest moments, reframes them for Shorts, Reels and TikTok, adds animated captions, a hook title and a generated music bed, then verifies every file.
 
-It works for **talking videos** (podcasts, interviews, vlogs, any language including Arabic) and for **gameplay** (GTA, Fortnite and so on), where it finds highlights from the action instead of the words.
+It works for **talking videos** (podcasts, interviews, vlogs, any language including Arabic), for **gameplay** (GTA, Fortnite and so on), where it finds highlights from the action instead of the words, and for **live streams**, with a Clip that button and automatic clips of big moments while the stream runs.
 
 ## What it does
 
@@ -38,6 +38,18 @@ For talking videos, pauses between 0.45 and 2.5 seconds are shortened to 0.2 sec
 ### Re-run with new settings
 
 Open any finished job and press **Re-run with these settings** to try another framing, caption style or clip length on the same video. Nothing is downloaded again, the video is linked rather than copied, and the transcript is reused when the Whisper model and language are unchanged.
+
+### Live streams
+
+Choose **Live** as the source and paste a Twitch, YouTube Live or Kick link, then **Start watching**.
+
+- Clipper records the stream in 10 second pieces and keeps the **last 30 minutes**, so you can clip something that just happened.
+- **Clip that** (or press **C**) turns the last 30, 45, 60 or 90 seconds into a finished clip while recording carries on.
+- **Auto clips:** every half second is scored for motion, sudden loud sounds and loudness against what's normal for *this* stream. After a 90 second warm-up, a real spike becomes a clip automatically (at most one every 2 minutes), including the build up before it.
+- The page shows a live graph of the action for the last 5 minutes. Clips render one after another in the background, each with captions, a hook, post text and the usual checks.
+- Clips are ready about 10 seconds after the moment plus the render time. Live clips keep the stream's own audio, with no added music.
+
+Only clip streams you have the rights to use, such as your own, or with the streamer's permission.
 
 ### Trim, cancel
 
@@ -140,7 +152,7 @@ Uploads are limited to 8 GB by default (`CLIPPER_MAX_UPLOAD_GB`).
 .venv\Scripts\python -m pytest
 ```
 
-The suite covers jump cuts, clip picking, gameplay highlights, captions (including Arabic), layout maths, music matching, post text, cancelling, the API, and real FFmpeg renders of a tiny test video. It needs FFmpeg but no GPU, models or network, and never touches your jobs folder. GitHub Actions runs it, plus a type check and build of the interface, on every push.
+The suite covers jump cuts, clip picking, gameplay highlights, captions (including Arabic), layout maths, music matching, post text, cancelling, live mode (a generated stream played in real time), the API, and real FFmpeg renders of a tiny test video. It needs FFmpeg but no GPU, models or network, and never touches your jobs folder. GitHub Actions runs it, plus a type check and build of the interface, on every push.
 
 Python and npm versions are pinned; Dependabot opens pull requests for updates.
 
@@ -163,6 +175,7 @@ clipper/
   captions.py        Animated ASS captions and hook titles, right to left aware
   music.py           MusicGen tracks, or matching tracks from your own folder
   social.py          Post captions and hashtags
+  live.py            Live streams: recorder, rolling buffer, live scoring, auto clips, Clip that
   reframe.py         Face and facecam detection
   render.py          FFmpeg filter graphs for every framing and the audio mix
   verify.py          Checks on every finished file

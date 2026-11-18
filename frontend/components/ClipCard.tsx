@@ -8,6 +8,19 @@ import { EASE, fast, riseIn, spring } from "@/lib/motion";
 const LABEL = { pass: "All checks passed", warn: "Passed with warnings", fail: "Failed checks" } as const;
 
 function SkeletonBody({ clip }: { clip: Clip }) {
+  if (clip.reason?.startsWith("Failed")) {
+    return (
+      <>
+        <div className="vid skel" style={{ color: "var(--bad)" }}>
+          <FilmStrip size={24} /><span className="caption-4">This clip couldn&apos;t be made</span>
+        </div>
+        <div className="body">
+          <span className="title-3">{clip.index}. {clip.title}</span>
+          <p className="caption-5 bad">{clip.reason}</p>
+        </div>
+      </>
+    );
+  }
   return (
     <>
       <div className="vid skel">
