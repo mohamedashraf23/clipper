@@ -30,6 +30,8 @@ MUSICGEN_MODEL = os.getenv("MUSICGEN_MODEL", "facebook/musicgen-small")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")  # free local model; qwen2.5:3b if VRAM is tight
+MAX_UPLOAD_GB = float(os.getenv("CLIPPER_MAX_UPLOAD_GB", "8"))
+MUSIC_DIR = os.getenv("CLIPPER_MUSIC_DIR", "")  # your own tracks; used instead of MusicGen when set
 MUSIC_MAX_SECONDS = 30  # MusicGen is trained on 30 s pieces; longer clips loop the track
 
 HOST = os.getenv("CLIPPER_HOST", "127.0.0.1")

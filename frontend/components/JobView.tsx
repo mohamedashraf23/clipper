@@ -1,9 +1,9 @@
 "use client";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  Check, DownloadSimple, FilmStrip, GameController, MusicNotes, SealCheck, Sparkle, TerminalWindow, Waveform, WarningCircle, X,
+  Check, DownloadSimple, FilmStrip, GameController, MusicNotes, SealCheck, Sparkle, StopCircle, TerminalWindow, Waveform, WarningCircle, X,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { isRtl, STEPS, type JobState } from "@/lib/api";
 import { EASE, fast, move } from "@/lib/motion";
 import { AnimatedNumber } from "./controls";
@@ -21,7 +21,7 @@ function Stepper({ job }: { job: JobState }) {
         let state = "";
         if (job.status === "done" || i < idx) state = "done";
         else if (i === idx && job.status === "running") state = "active";
-        else if (i === idx && (job.status === "error" || job.status === "interrupted")) state = "failed";
+        else if (i === idx && (job.status === "error" || job.status === "interrupted" || job.status === "cancelled")) state = "failed";
         return (
           <motion.div key={s.key} className={`step ${state}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
                       transition={{ ...move, delay: i * 0.05 }}>
@@ -60,7 +60,10 @@ function ProgressBar({ job }: { job: JobState }) {
   );
 }
 
-export function JobView({ job }: { job: JobState }) {
+export function JobView({ job, onCancel }: { job: JobState; onCancel?: (id: string) => Promise<void> }) {
+  const [cancelling, setCancelling] = useState(false);
+  const active = job.status === "running" || job.status === "queued";
+  useEffect(() => { if (!active) setCancelling(false); }, [active]);
   const logRef = useRef<HTMLPreElement>(null);
   const title = job.title || job.source;
   useEffect(() => {
@@ -95,8 +98,20 @@ export function JobView({ job }: { job: JobState }) {
             {job.message}
           </motion.span>
         </AnimatePresence>
-        <span className="body-5 mono">
-          {job.status === "running" ? <AnimatedNumber value={Math.round(job.progress * 100)} suffix="%" /> : job.status === "queued" ? "Queued" : ""}
+        <span className="status-right">
+          <span className="body-5 mono">
+            {job.status === "running" ? <AnimatedNumber value={Math.round(job.progress * 100)} suffix="%" /> : job.status === "queued" ? "Queued" : job.status === "cancelled" ? "Cancelled" : ""}
+          </span>
+          <AnimatePresence>
+            {active && onCancel && (
+              <motion.button type="button" className="btn button-sm" disabled={cancelling}
+                             initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+                             whileTap={{ scale: 0.96 }} transition={fast}
+                             onClick={async () => { setCancelling(true); try { await onCancel(job.id); } catch { setCancelling(false); } }}>
+                <StopCircle size={16} />{cancelling ? "Cancelling" : "Cancel"}
+              </motion.button>
+            )}
+          </AnimatePresence>
         </span>
       </div>
       <AnimatePresence>

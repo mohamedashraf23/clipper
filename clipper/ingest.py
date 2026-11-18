@@ -30,9 +30,20 @@ def download(url: str, job_dir: Path, log=print) -> tuple[Path, str]:
         "no_warnings": True,
         "progress_hooks": [hook],
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        title = info.get("title") or "video"
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            title = info.get("title") or "video"
+    except yt_dlp.utils.DownloadError as e:
+        msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e)).replace("ERROR: ", "")
+        hint = ""
+        if re.search(r"private|sign in|login|age", msg, re.I):
+            hint = " The video needs a login or is private: download it yourself and upload the file instead."
+        elif re.search(r"unsupported url|no video", msg, re.I):
+            hint = " That page doesn't contain a video yt-dlp can read."
+        elif re.search(r"http error 4\d\d|unable to download", msg, re.I):
+            hint = " If downloads from this site worked before, update yt-dlp: .venv\\Scripts\\python -m pip install -U yt-dlp"
+        raise RuntimeError(f"Couldn't download that link: {msg[:300]}.{hint}") from None
     files = sorted(job_dir.glob("source.*"), key=lambda p: p.stat().st_size, reverse=True)
     files = [f for f in files if f.suffix not in (".part", ".ytdl")]
     if not files:

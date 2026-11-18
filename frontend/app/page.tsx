@@ -15,6 +15,7 @@ export default function Page() {
   const [jobs, setJobs] = useState<JobSummary[] | null | "error">(null);
   const [current, setCurrent] = useState<string | null>(null);
   const [job, setJob] = useState<JobState | null>(null);
+  const [pollKey, setPollKey] = useState(0); // bump to start polling again (a trim re-renders inside the same job)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const loadJobs = useCallback(() => api.jobs().then(setJobs).catch(() => setJobs("error")), []);
@@ -41,7 +42,7 @@ export default function Page() {
     };
     tick();
     return () => { alive = false; clearTimeout(timer.current); };
-  }, [current, loadJobs]);
+  }, [current, loadJobs, pollKey]);
 
   const open = (id: string) => { if (id !== current) { setJob(null); setCurrent(id); } };
 
@@ -56,6 +57,20 @@ export default function Page() {
     open(newId);
     loadJobs();
   }
+
+  async function cancel(id: string) {
+    await api.cancel(id);
+    setPollKey((k) => k + 1);
+  }
+
+  async function trim(index: number, start: number, end: number) {
+    if (!job) return;
+    await api.trim(job.id, index, start, end);
+    setPollKey((k) => k + 1);
+    loadJobs();
+  }
+
+  const jobBusy = !!job && (job.status === "running" || job.status === "queued");
 
   const rerunTarget = job && job.status !== "running" && job.status !== "queued"
     ? { id: job.id, title: job.title || job.origin || job.source } : null;
@@ -81,10 +96,13 @@ export default function Page() {
               <motion.div key={current} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: fast }}>
                 {job ? (
                   <>
-                    <JobView job={job} />
+                    <JobView job={job} onCancel={cancel} />
                     <motion.div className="grid" variants={stagger(0.08)} initial="hidden" animate="show">
                       <AnimatePresence>
-                        {job.clips.map((c) => <ClipCard key={`${job.id}-${c.index}`} jobId={job.id} clip={c} />)}
+                        {job.clips.map((c) => (
+                          <ClipCard key={`${job.id}-${c.index}`} jobId={job.id} clip={c} busy={jobBusy}
+                                    sourceDuration={job.source_meta?.duration} onTrim={trim} />
+                        ))}
                       </AnimatePresence>
                     </motion.div>
                   </>

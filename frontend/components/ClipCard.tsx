@@ -1,6 +1,6 @@
 "use client";
 import { AnimatePresence, motion } from "motion/react";
-import { CaretDown, ChartBar, Clock, DownloadSimple, FilmStrip, MusicNotes, Scissors } from "@phosphor-icons/react";
+import { CaretDown, ChartBar, Check, Clock, Copy, DownloadSimple, FilmStrip, MusicNotes, Scissors, Sliders } from "@phosphor-icons/react";
 import { useState } from "react";
 import { fileUrl, fmtTime, isRtl, type Clip } from "@/lib/api";
 import { EASE, fast, riseIn, spring } from "@/lib/motion";
@@ -29,7 +29,78 @@ function SkeletonBody({ clip }: { clip: Clip }) {
   );
 }
 
-export function ClipCard({ jobId, clip }: { jobId: string; clip: Clip }) {
+const MIN_LEN = 3, MAX_LEN = 180, PAD = 20;
+const fmtPrecise = (t: number) => `${fmtTime(t)}.${Math.floor((t % 1) * 10)}`;
+
+/** Drag the start and end, then re-render this clip in all its aspects. */
+function TrimEditor({ clip, sourceDuration, onTrim, onClose }: {
+  clip: Clip; sourceDuration: number; onTrim: (start: number, end: number) => Promise<void>; onClose: () => void;
+}) {
+  const lo = Math.max(0, clip.start - PAD), hi = Math.min(sourceDuration || clip.end + PAD, clip.end + PAD);
+  const [start, setStart] = useState(clip.start);
+  const [end, setEnd] = useState(clip.end);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const len = end - start;
+  const bad = len < MIN_LEN ? `At least ${MIN_LEN} seconds` : len > MAX_LEN ? `At most ${MAX_LEN} seconds` : "";
+  const changed = Math.abs(start - clip.start) > 0.05 || Math.abs(end - clip.end) > 0.05;
+  const nudge = (which: "s" | "e", d: number) =>
+    which === "s" ? setStart((v) => Math.min(Math.max(lo, +(v + d).toFixed(1)), end - MIN_LEN))
+                  : setEnd((v) => Math.max(Math.min(hi, +(v + d).toFixed(1)), start + MIN_LEN));
+
+  return (
+    <motion.div className="trim" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={fast}>
+      {(["s", "e"] as const).map((k) => (
+        <div key={k} className="trim-row">
+          <span className="caption-4 soft">{k === "s" ? "Start" : "End"}</span>
+          <button type="button" className="btn icon caption-4" onClick={() => nudge(k, -0.5)} aria-label={`${k === "s" ? "Start" : "End"} half a second earlier`}>−</button>
+          <input type="range" min={lo} max={hi} step={0.1} value={k === "s" ? start : end}
+                 aria-label={k === "s" ? "Clip start" : "Clip end"}
+                 onChange={(e) => (k === "s" ? setStart(Math.min(+e.target.value, end - MIN_LEN)) : setEnd(Math.max(+e.target.value, start + MIN_LEN)))} />
+          <button type="button" className="btn icon caption-4" onClick={() => nudge(k, 0.5)} aria-label={`${k === "s" ? "Start" : "End"} half a second later`}>+</button>
+          <span className="mono caption-4 trim-t">{fmtPrecise(k === "s" ? start : end)}</span>
+        </div>
+      ))}
+      <div className="trim-foot">
+        <span className={`caption-5 ${bad ? "bad" : "muted"}`}>{bad || `${len.toFixed(1)}s long, was ${(clip.end - clip.start).toFixed(1)}s`}</span>
+        <span className="trim-actions">
+          <button type="button" className="btn button-sm" onClick={onClose} disabled={busy}>Close</button>
+          <motion.button type="button" className="btn button-sm primary-ish" disabled={!!bad || !changed || busy} whileTap={{ scale: 0.97 }}
+                         onClick={async () => { setBusy(true); setErr(""); try { await onTrim(start, end); onClose(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); } }}>
+            <Scissors size={14} />{busy ? "Starting" : "Re-render clip"}
+          </motion.button>
+        </span>
+      </div>
+      {err && <p className="caption-5 bad">{err}</p>}
+    </motion.div>
+  );
+}
+
+function PostBox({ post }: { post: NonNullable<Clip["post"]> }) {
+  const [copied, setCopied] = useState(false);
+  const text = `${post.caption}\n\n${post.hashtags.join(" ")}`;
+  return (
+    <div className="post">
+      <p className="caption-5 soft" dir="auto">{post.caption}</p>
+      <p className="caption-5 muted" dir="auto">{post.hashtags.join(" ")}</p>
+      <motion.button type="button" className="btn button-sm" whileTap={{ scale: 0.96 }} transition={fast}
+                     onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch { /* clipboard blocked */ } }}>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span key={copied ? "y" : "n"} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+                       initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }}>
+            {copied ? <><Check size={14} weight="bold" />Copied</> : <><Copy size={14} />Copy post text</>}
+          </motion.span>
+        </AnimatePresence>
+      </motion.button>
+    </div>
+  );
+}
+
+export function ClipCard({ jobId, clip, busy, sourceDuration, onTrim }: {
+  jobId: string; clip: Clip; busy?: boolean; sourceDuration?: number;
+  onTrim?: (index: number, start: number, end: number) => Promise<void>;
+}) {
+  const [trimming, setTrimming] = useState(false);
   const aspects = Object.keys(clip.outputs);
   const [picked, setPicked] = useState<string | null>(null);
   const aspect = picked && clip.outputs[picked] ? picked : aspects[0];
@@ -91,11 +162,25 @@ export function ClipCard({ jobId, clip }: { jobId: string; clip: Clip }) {
                 )}
               </AnimatePresence>
             </div>
+            {clip.post && <PostBox post={clip.post} />}
             <div className="actions">
               <motion.a className="btn button-sm" href={fileUrl(jobId, out.file)} download whileHover={{ y: -1 }} whileTap={{ scale: 0.97 }} transition={fast}>
                 <DownloadSimple size={16} />Download {aspect}
               </motion.a>
+              {onTrim && (
+                <motion.button type="button" className="btn button-sm" disabled={busy} aria-expanded={trimming}
+                               onClick={() => setTrimming((v) => !v)} whileTap={{ scale: 0.97 }} transition={fast}
+                               title={busy ? "Wait for the current job to finish" : "Change where this clip starts and ends"}>
+                  <Sliders size={16} />Trim
+                </motion.button>
+              )}
             </div>
+            <AnimatePresence>
+              {trimming && onTrim && !busy && (
+                <TrimEditor clip={clip} sourceDuration={sourceDuration ?? 0}
+                            onTrim={(s, e) => onTrim(clip.index, s, e)} onClose={() => setTrimming(false)} />
+              )}
+            </AnimatePresence>
           </div>
         </>
       )}

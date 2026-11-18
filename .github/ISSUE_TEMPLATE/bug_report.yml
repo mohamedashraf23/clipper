@@ -1,0 +1,27 @@
+name: Bug report
+description: Something broke or a clip came out wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Job log
+      description: Open the job in the page, expand Log, and paste the end of it. Remove anything private first.
+      render: text
+  - type: input
+    id: video
+    attributes:
+      label: Kind of video
+      description: For example "Arabic podcast, 40 min" or "GTA gameplay with facecam". No private links please.
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      description: Windows version, GPU, and which picker you used (local AI, Claude or rules).

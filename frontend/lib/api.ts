@@ -3,7 +3,7 @@
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 export type VerifyStatus = "pass" | "warn" | "fail";
-export type JobStatus = "queued" | "running" | "done" | "error" | "interrupted";
+export type JobStatus = "queued" | "running" | "done" | "error" | "interrupted" | "cancelled";
 
 export interface Check { name: string; status: VerifyStatus; detail: string }
 export interface Output {
@@ -16,12 +16,14 @@ export interface Clip {
   music_file: string | null; status: "pending" | "rendering" | "done";
   outputs: Record<string, Output>;
   cut_seconds?: number;
+  post?: { caption: string; hashtags: string[] };
 }
 export interface JobState {
   id: string; source: string; title: string; status: JobStatus; stage: string | null;
   progress: number; message: string; pick_method: string | null; content?: "talk" | "gameplay";
   clips: Clip[]; log: string[]; error: string | null; created: number;
   origin?: string; rerun_of?: string;
+  source_meta?: { duration: number; width: number; height: number; fps: number };
 }
 export interface JobSummary {
   id: string; title: string; source: string; status: JobStatus; progress: number;
@@ -38,7 +40,7 @@ export interface Settings {
   framing: string; facecam: string; content: string;
   captions: boolean; hook_text: boolean; music: boolean; music_volume: number;
   caption_style: string; zoom: string; picker: string; whisper_model: string; language: string;
-  tighten: boolean;
+  tighten: boolean; music_source: "ai" | "folder"; music_dir: string;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -54,6 +56,10 @@ export const api = {
   rerun: (id: string, settings: Settings) => fetch(`${API_BASE}/api/jobs/${id}/rerun`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings),
   }).then(json<{ id: string }>),
+  cancel: (id: string) => fetch(`${API_BASE}/api/jobs/${id}/cancel`, { method: "POST" }).then(json<{ cancelling: string }>),
+  trim: (id: string, index: number, start: number, end: number) => fetch(`${API_BASE}/api/jobs/${id}/clips/${index}/trim`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start, end }),
+  }).then(json<{ id: string; clip: number }>),
   remove: (id: string) => fetch(`${API_BASE}/api/jobs/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
   create: (settings: Settings, source: { url?: string; file?: File }) => {
     const fd = new FormData();

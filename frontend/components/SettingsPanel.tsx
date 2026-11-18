@@ -37,6 +37,8 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
   const [hook, setHook] = useState(true);
   const [music, setMusic] = useState(true);
   const [tighten, setTighten] = useState(true);
+  const [musicSource, setMusicSource] = useState<"ai" | "folder">("ai");
+  const [musicDir, setMusicDir] = useState("");
   const [rerunBusy, setRerunBusy] = useState(false);
   const [style, setStyle] = useState("bold");
   const [zoom, setZoom] = useState("punch");
@@ -63,12 +65,13 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
   const collect = (): Settings => ({
     n_clips: n, min_len: minLen, max_len: maxLen, aspects, framing, facecam, content,
     captions, hook_text: hook, music, music_volume: vol / 100, caption_style: style, zoom, picker,
-    whisper_model: whisper, language: lang, tighten,
+    whisper_model: whisper, language: lang, tighten, music_source: musicSource, music_dir: musicDir.trim(),
   });
 
   /** checks shared by a new job and a re-run; returns false after showing the error */
   const settingsOk = () => {
     if (!aspects.length) { fail("Pick at least one aspect ratio."); return false; }
+    if (music && musicSource === "folder" && !musicDir.trim()) { fail("Paste the path of your music folder, or switch to AI music."); return false; }
     if (!minLen || !maxLen || minLen >= maxLen) { fail("The shortest length must be below the longest.", "len"); return false; }
     return true;
   };
@@ -223,6 +226,24 @@ export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
               <option value="punch">Punch in</option><option value="slow">Slow push</option><option value="none">None</option>
             </select></div>
         </div>
+        <AnimatePresence initial={false}>
+          {music && (
+            <motion.div className="field" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={fast}>
+              <label htmlFor="musicsrc" className="body-6">Music source</label>
+              <select id="musicsrc" className="body-6" value={musicSource} onChange={(e) => setMusicSource(e.target.value as "ai" | "folder")}>
+                <option value="ai">AI generated (MusicGen, not for commercial use)</option>
+                <option value="folder">My music folder (tracks I own or licensed)</option>
+              </select>
+              {musicSource === "folder" && (
+                <>
+                  <input type="text" className="body-6 mono" value={musicDir} onChange={(e) => setMusicDir(e.target.value)}
+                         placeholder="C:\Users\you\Music\clip tracks" spellCheck={false} aria-label="Music folder path" />
+                  <p className="caption-5 muted">Each clip gets the track whose file or folder name best matches its mood, like calm-lofi-piano.mp3.</p>
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
         <div className="field">
           <label className="lbl body-6" htmlFor="vol">Music volume <b className="body-4">{vol}%</b></label>
           <input type="range" id="vol" min={5} max={80} value={vol} disabled={!music} onChange={(e) => setVol(+e.target.value)} />

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { isRtl, type JobSummary } from "@/lib/api";
 import { fast, move } from "@/lib/motion";
 
-const DOT: Record<string, string> = { done: "pass", error: "fail", interrupted: "fail" };
+const DOT: Record<string, string> = { done: "pass", error: "fail", interrupted: "fail", cancelled: "" };
 
 function DeleteButton({ onConfirm }: { onConfirm: () => void }) {
   const [armed, setArmed] = useState(false);

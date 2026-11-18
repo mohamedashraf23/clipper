@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -39,14 +40,37 @@ def ffmpeg_dir() -> str:
     return str(Path(find_bin("ffmpeg")).parent)
 
 
+_active: set[subprocess.Popen] = set()  # running ffmpeg/ffprobe processes, so a job can be cancelled mid-render
+_active_lock = threading.Lock()
+
+
+def kill_all():
+    """Stop every running ffmpeg/ffprobe (the caller decides what a failed run means)."""
+    with _active_lock:
+        for p in list(_active):
+            try:
+                p.kill()
+            except OSError:
+                pass
+
+
 def run(args: list[str], cwd: str | Path | None = None, binary: str = "ffmpeg") -> subprocess.CompletedProcess:
     cmd = [find_bin(binary), *map(str, args)]
     if binary == "ffmpeg":
         cmd[1:1] = ["-hide_banner", "-nostdin", "-y"]
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        tail = "\n".join(proc.stderr.strip().splitlines()[-15:])
-        raise FFmpegError(f"{binary} failed ({proc.returncode}):\n{tail}")
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, encoding="utf-8", errors="replace")
+    with _active_lock:
+        _active.add(p)
+    try:
+        out, err = p.communicate()
+    finally:
+        with _active_lock:
+            _active.discard(p)
+    proc = subprocess.CompletedProcess(cmd, p.returncode, out, err)
+    if p.returncode != 0:
+        tail = "\n".join(err.strip().splitlines()[-15:])
+        raise FFmpegError(f"{binary} failed ({p.returncode}):\n{tail}")
     return proc
 
 

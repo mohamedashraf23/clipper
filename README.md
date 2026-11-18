@@ -1,5 +1,8 @@
 # Clipper
 
+[![CI](https://github.com/mohamedashraf23/clipper/actions/workflows/ci.yml/badge.svg)](https://github.com/mohamedashraf23/clipper/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
 **Turn one long video into short clips ready to post: captions, AI music, every aspect ratio, checked before you download. Runs on your own PC, free.**
 
 Paste a YouTube link or drop an MP4. Clipper transcribes it, picks the strongest moments, reframes them for Shorts, Reels and TikTok, adds animated captions, a hook title and a generated music bed, then verifies every file.
@@ -16,6 +19,7 @@ It works for **talking videos** (podcasts, interviews, vlogs, any language inclu
 | 4. Style | Jump cuts that trim pauses and filler words (talking videos), word by word animated captions, a hook title for the first 3 seconds, punch in zoom, and an instrumental track generated for each clip that ducks under the voice | FFmpeg, libass, MusicGen |
 | 5. Formats | Every clip rendered in 9:16, 1:1 and 16:9 | FFmpeg, NVENC or x264 |
 | 6. Verify | Resolution, duration, audio, codec, loudness (−14 LUFS), black frames, dead air and captions. A render that fails is redone once on the CPU encoder | ffprobe, ebur128 |
+| Post | A caption and 5 to 8 hashtags per clip in the video's language, saved as `post.txt` with a copy button in the page | Ollama |
 
 ### Framing when the shape doesn't match
 
@@ -35,11 +39,25 @@ For talking videos, pauses between 0.45 and 2.5 seconds are shortened to 0.2 sec
 
 Open any finished job and press **Re-run with these settings** to try another framing, caption style or clip length on the same video. Nothing is downloaded again, the video is linked rather than copied, and the transcript is reused when the Whisper model and language are unchanged.
 
+### Trim, cancel
+
+- **Trim:** press **Trim** on any clip, drag its start and end (or nudge by half a second), then **Re-render clip**. Only that clip is rendered again, in all its aspects, with the same hook, music and framing.
+- **Cancel:** a running job stops within a moment, even mid render. Clips that already finished are kept.
+
+### Music
+
+| Source | Use it for |
+|---|---|
+| AI generated (MusicGen) | Trying things out. MusicGen's weights are licensed for non commercial use only |
+| My music folder | Anything you'll monetise. Point it at a folder of tracks you own or licensed (mp3, wav, m4a, flac, ogg). Each clip gets the track whose file or folder name best matches its mood, for example `calm-lofi-piano.mp3` or `energetic/track1.mp3`, and a batch spreads across different tracks |
+
+Set a default folder with `CLIPPER_MUSIC_DIR` in `.env`.
+
 ### Who picks the clips
 
 | Picker | Cost | Notes |
 |---|---|---|
-| Free local AI | Free | Ollama with `qwen2.5:7b`, runs on your GPU |
+| Free local AI | Free | Ollama with `qwen2.5:7b`, runs on your GPU. Answers in the wrong language are sent back once for a fix, and clips on the same topic are dropped |
 | Claude | Paid API, a few cents per video | Best judgement, needs `ANTHROPIC_API_KEY` |
 | Simple rules | Free | Fastest. Also the fallback if the others aren't available |
 
@@ -109,9 +127,22 @@ Animations respect your system's reduced motion setting.
 Each run gets its own folder in the jobs folder: `jobs/` in the project, or `~/clipper-jobs` when the project sits inside a synced folder such as OneDrive or Dropbox (so the sync client doesn't upload every video). Set `CLIPPER_JOBS_DIR` in `.env` to choose another place.
 
 - `NN-title/NN-title_9x16.mp4` (plus `_1x1` and `_16x9`): the finished clips, each with a poster image
+- `NN-title/post.txt`: the caption and hashtags to paste when you post
 - `transcript.json`: the word level transcript
 - `job.json`: the picks, hooks, music prompts and verify results
 
+Uploads are limited to 8 GB by default (`CLIPPER_MAX_UPLOAD_GB`).
+
+## Tests
+
+```bash
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m pytest
+```
+
+The suite covers jump cuts, clip picking, gameplay highlights, captions (including Arabic), layout maths, music matching, post text, cancelling, the API, and real FFmpeg renders of a tiny test video. It needs FFmpeg but no GPU, models or network, and never touches your jobs folder. GitHub Actions runs it, plus a type check and build of the interface, on every push.
+
+Python and npm versions are pinned; Dependabot opens pull requests for updates.
 
 ## Project layout
 
@@ -130,10 +161,12 @@ clipper/
   highlights.py      Clip picking for gameplay (motion, audio bursts, cutscene detection)
   tighten.py         Jump cuts: which pieces of a talking clip to keep
   captions.py        Animated ASS captions and hook titles, right to left aware
-  music.py           MusicGen background tracks
+  music.py           MusicGen tracks, or matching tracks from your own folder
+  social.py          Post captions and hashtags
   reframe.py         Face and facecam detection
   render.py          FFmpeg filter graphs for every framing and the audio mix
   verify.py          Checks on every finished file
+tests/               pytest suite (run by GitHub Actions)
 ```
 
 ## Notes

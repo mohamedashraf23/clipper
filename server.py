@@ -76,8 +76,19 @@ async def create_job(url: str = Form(""), settings: str = Form("{}"), file: Uplo
         job_dir = config.JOBS_DIR / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         dest = job_dir / f"upload{ext}"
+        written, limit = 0, config.MAX_UPLOAD_GB * 1024 ** 3
         with dest.open("wb") as fh:
-            shutil.copyfileobj(file.file, fh, length=8 * 1024 * 1024)
+            while chunk := file.file.read(8 * 1024 * 1024):
+                written += len(chunk)
+                if written > limit:
+                    fh.close()
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                    raise HTTPException(413, f"That file is over {config.MAX_UPLOAD_GB:g} GB. "
+                                             "Set CLIPPER_MAX_UPLOAD_GB in .env to allow bigger uploads.")
+                fh.write(chunk)
+        if written == 0:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise HTTPException(400, "The uploaded file is empty")
         source = str(dest)
         opts.setdefault("title", Path(file.filename).stem)
     elif url.strip():
@@ -103,6 +114,36 @@ def rerun(job_id: str, settings: dict = Body(default_factory=dict)):
     except FileNotFoundError as e:
         raise HTTPException(410, f"Can't re-run: {e}")
     return {"id": job.id}
+
+
+@app.post("/api/jobs/{job_id}/clips/{index}/trim")
+def trim(job_id: str, index: int, body: dict = Body(...)):
+    """Move one clip's start/end (seconds in the source video) and re-render just that clip."""
+    try:
+        pipeline.retrim_clip(job_id, index, float(body["start"]), float(body["end"]))
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, str(e) if isinstance(e, ValueError) else "Send start and end in seconds")
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(404 if str(e) == job_id else 410, "No such job" if str(e) == job_id else str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return {"id": job_id, "clip": index}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel(job_id: str):
+    """Stop a queued or running job. Clips already finished stay in the job."""
+    job = pipeline._jobs.get(job_id)
+    if not job:
+        if pipeline.get_state(job_id):
+            raise HTTPException(409, "That job isn't running")
+        raise HTTPException(404, "No such job")
+    if job.state["status"] not in ("queued", "running"):
+        raise HTTPException(409, "That job isn't running")
+    job.cancel()
+    return {"cancelling": job_id}
 
 
 @app.get("/api/jobs")

@@ -159,6 +159,36 @@ def ollama_status() -> dict:
     return {"running": True, "model": config.OLLAMA_MODEL, "installed": want in names}
 
 
+def _language_problem(plan: "ClipPlan", lang_code: str, lang_name: str) -> str:
+    """Describe what's wrong with a small model's answer, or '' when it's fine."""
+    issues = []
+    cjk_ok = lang_code in ("zh", "ja", "ko")
+    if not cjk_ok and any(_CJK.search(c.title + c.hook) for c in plan.clips):
+        issues.append(f"titles or hooks in Chinese instead of {lang_name}")
+    if any(not c.music_mood.isascii() or len(c.music_mood.split()) < 3 for c in plan.clips):
+        issues.append("music_mood not written as an English description")
+    if any(not 1 <= c.score <= 100 for c in plan.clips):
+        issues.append("scores outside 1 to 100")
+    return " and ".join(issues)
+
+
+def _dedupe(picks: list[dict], transcript: dict, limit: float = 0.5) -> list[dict]:
+    """Drop clips that say mostly the same thing as a better clip (shared vocabulary above `limit`)."""
+    words = all_words(transcript)
+
+    def vocab(p):
+        return {re.sub(r"\W+", "", w["word"].lower()) for w in words
+                if p["start"] <= w["start"] < p["end"] and len(re.sub(r"\W+", "", w["word"])) > 3}
+    kept, sets = [], []
+    for p in sorted(picks, key=lambda q: q.get("score", 0), reverse=True):
+        v = vocab(p)
+        if v and any(len(v & s) / max(1, min(len(v), len(s))) > limit for s in sets):
+            continue
+        kept.append(p)
+        sets.append(v)
+    return sorted(kept, key=lambda q: q.get("score", 0), reverse=True)
+
+
 def pick_with_ollama(transcript: dict, n: int, min_len: float, max_len: float, title: str, log=print) -> list[dict]:
     """Free, local LLM. Long transcripts are split into windows the small model can read well."""
     segs = transcript["segments"]
@@ -190,18 +220,31 @@ def pick_with_ollama(transcript: dict, n: int, min_len: float, max_len: float, t
             "Write music_mood in ENGLISH as 5-12 words describing genre, instruments and energy. "
             "score is an integer from 1 to 100. Reply with JSON only."
         )
-        res = _ollama("/api/chat", {
-            "model": config.OLLAMA_MODEL,
-            "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-            "format": schema,
-            "stream": False,
-            "options": {"temperature": 0.3, "num_ctx": 12288},
-            "keep_alive": 0 if i == len(windows) - 1 else "5m",  # free the GPU for MusicGen when done
-        })
-        try:
-            plan = ClipPlan.model_validate_json(res["message"]["content"])
-        except Exception as e:
-            log(f"Local AI returned unusable JSON for part {i + 1} ({type(e).__name__}); skipping it")
+        messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
+        plan = None
+        for attempt in (1, 2):
+            last = i == len(windows) - 1 and attempt == 2
+            res = _ollama("/api/chat", {
+                "model": config.OLLAMA_MODEL, "messages": messages, "format": schema, "stream": False,
+                "options": {"temperature": 0.3 if attempt == 1 else 0.1, "num_ctx": 12288},
+                "keep_alive": 0 if last else "5m",  # free the GPU for MusicGen when done
+            })
+            reply = res["message"]["content"]
+            try:
+                plan = ClipPlan.model_validate_json(reply)
+            except Exception as e:
+                log(f"Local AI returned unusable JSON for part {i + 1} ({type(e).__name__})")
+                plan = None
+                break
+            problem = _language_problem(plan, transcript.get("language", ""), lang)
+            if not problem or attempt == 2:
+                break
+            log(f"Local AI answer had {problem}; asking it to fix that")
+            messages += [{"role": "assistant", "content": reply},
+                         {"role": "user", "content": f"Your answer has {problem}. Keep the same clips and times, "
+                                                     f"write title and hook in {lang} and music_mood in English, "
+                                                     "score between 1 and 100. Reply with the full JSON again."}]
+        if plan is None:
             continue
         picks += [c.model_dump() for c in plan.clips]
     picks.sort(key=lambda p: p.get("score", 0), reverse=True)
@@ -264,11 +307,13 @@ def pick_clips(transcript: dict, n: int, min_len: float, max_len: float, duratio
             except Exception as e:
                 log(f"Local AI picking failed ({type(e).__name__}: {e}); using the rule-based picker")
 
-    if len(picks) < n:  # top up with rule-based picks that don't overlap
+    picks = _dedupe(picks, transcript)
+    if len(picks) < n:  # top up with rule-based picks that don't overlap (or repeat a topic)
         extra = _snap(pick_with_rules(transcript, n * 3, min_len, max_len), transcript, duration, min_len, max_len)
         for e in extra:
             if len(picks) >= n:
                 break
             if not any(e["start"] < p["end"] and e["end"] > p["start"] for p in picks):
                 picks.append(e)
+        picks = _dedupe(picks, transcript)
     return _clean(picks[:n], transcript), method

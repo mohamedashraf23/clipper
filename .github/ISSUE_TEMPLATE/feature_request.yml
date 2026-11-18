@@ -1,0 +1,16 @@
+name: Feature idea
+description: Suggest something Clipper should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would you like it to do, and for what kind of videos?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it helps
+      description: What do you do today without it?
