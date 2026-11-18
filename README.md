@@ -108,3 +108,7 @@ clipper/
 - One job runs at a time, so Whisper, the local AI and MusicGen take turns on the GPU.
 - MusicGen writes up to 30 seconds of music. Longer clips loop it with a fade in and out.
 - Only clip videos you have the rights to use, and check each platform's rules for game footage.
+
+## License
+
+[MIT](LICENSE). The models Clipper downloads (Whisper, MusicGen, Qwen) come with their own licenses. MusicGen weights are for non commercial use.
