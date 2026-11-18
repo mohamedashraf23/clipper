@@ -1,7 +1,7 @@
 "use client";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  CaretDown, FilmStrip, LinkSimple, MusicNotes, Scissors, Subtitles, TextT, UploadSimple, WarningCircle,
+  ArrowClockwise, CaretDown, FilmStrip, LinkSimple, MusicNotes, Scissors, Subtitles, TextT, Timer, UploadSimple, WarningCircle,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Health, Settings } from "@/lib/api";
@@ -16,8 +16,11 @@ const ASPECTS = [
 
 type Source = { url?: string; file?: File };
 
-export function SettingsPanel({ health, onSubmit }: {
+export function SettingsPanel({ health, onSubmit, rerunTarget, onRerun }: {
   health: Health | null | "offline"; onSubmit: (s: Settings, src: Source) => Promise<void>;
+  /** the open job, when it can be re-run with the settings below */
+  rerunTarget?: { id: string; title: string } | null;
+  onRerun?: (id: string, s: Settings) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"url" | "file">("url");
   const [url, setUrl] = useState("");
@@ -33,6 +36,8 @@ export function SettingsPanel({ health, onSubmit }: {
   const [captions, setCaptions] = useState(true);
   const [hook, setHook] = useState(true);
   const [music, setMusic] = useState(true);
+  const [tighten, setTighten] = useState(true);
+  const [rerunBusy, setRerunBusy] = useState(false);
   const [style, setStyle] = useState("bold");
   const [zoom, setZoom] = useState("punch");
   const [vol, setVol] = useState(30);
@@ -55,6 +60,24 @@ export function SettingsPanel({ health, onSubmit }: {
     if (field === "url") urlRef.current?.focus();
   };
 
+  const collect = (): Settings => ({
+    n_clips: n, min_len: minLen, max_len: maxLen, aspects, framing, facecam, content,
+    captions, hook_text: hook, music, music_volume: vol / 100, caption_style: style, zoom, picker,
+    whisper_model: whisper, language: lang, tighten,
+  });
+
+  /** checks shared by a new job and a re-run; returns false after showing the error */
+  const settingsOk = () => {
+    if (!aspects.length) { fail("Pick at least one aspect ratio."); return false; }
+    if (!minLen || !maxLen || minLen >= maxLen) { fail("The shortest length must be below the longest.", "len"); return false; }
+    return true;
+  };
+
+  const serverError = (err: unknown) => {
+    const m = (err as Error).message;
+    fail(m === "Failed to fetch" ? "Can't reach the server. Is start.bat running?" : m);
+  };
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(""); setInvalid(null);
@@ -62,19 +85,19 @@ export function SettingsPanel({ health, onSubmit }: {
       if (!url.trim()) return fail("Paste a video link first.", "url");
       if (!/^https?:\/\//i.test(url.trim())) return fail("The link should start with https://", "url");
     } else if (!file) return fail("Choose a video file first.");
-    if (!aspects.length) return fail("Pick at least one aspect ratio.");
-    if (!minLen || !maxLen || minLen >= maxLen) return fail("The shortest length must be below the longest.", "len");
+    if (!settingsOk()) return;
     setBusy(true);
     try {
-      await onSubmit({
-        n_clips: n, min_len: minLen, max_len: maxLen, aspects, framing, facecam, content,
-        captions, hook_text: hook, music, music_volume: vol / 100, caption_style: style, zoom, picker,
-        whisper_model: whisper, language: lang,
-      }, mode === "file" ? { file: file! } : { url: url.trim() });
-    } catch (err) {
-      const m = (err as Error).message;
-      fail(m === "Failed to fetch" ? "Can't reach the server. Is start.bat running?" : m);
-    } finally { setBusy(false); }
+      await onSubmit(collect(), mode === "file" ? { file: file! } : { url: url.trim() });
+    } catch (err) { serverError(err); } finally { setBusy(false); }
+  }
+
+  async function rerun() {
+    if (!rerunTarget || !onRerun) return;
+    setError(""); setInvalid(null);
+    if (!settingsOk()) return;
+    setRerunBusy(true);
+    try { await onRerun(rerunTarget.id, collect()); } catch (err) { serverError(err); } finally { setRerunBusy(false); }
   }
 
   const toggleAspect = (a: string) =>
@@ -187,7 +210,9 @@ export function SettingsPanel({ health, onSubmit }: {
           <Toggle checked={captions} onChange={setCaptions} icon={<Subtitles size={16} />}>Animated captions</Toggle>
           <Toggle checked={hook} onChange={setHook} icon={<TextT size={16} />}>Hook title, first 3 sec</Toggle>
           <Toggle checked={music} onChange={setMusic} icon={<MusicNotes size={16} />}>AI music</Toggle>
+          <Toggle checked={tighten} onChange={setTighten} icon={<Timer size={16} />}>Cut pauses and filler words</Toggle>
         </div>
+        <p className="caption-5 muted">Jump cuts apply to talking videos. Gameplay keeps its pauses.</p>
         <div className="row">
           <div className="field"><label htmlFor="style" className="body-6">Caption style</label>
             <select id="style" className="body-6" value={style} onChange={(e) => setStyle(e.target.value)}>
@@ -243,6 +268,20 @@ export function SettingsPanel({ health, onSubmit }: {
         </motion.span>
         <span>{busy ? (mode === "file" ? "Uploading" : "Starting") : "Make clips"}</span>
       </motion.button>
+      <AnimatePresence>
+        {rerunTarget && (
+          <motion.button key="rerun" type="button" className="btn btn-secondary button-sm" onClick={rerun} disabled={rerunBusy}
+                         initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                         whileHover={{ y: -1 }} whileTap={{ scale: 0.98 }} transition={fast}
+                         title="Same video, new settings. Skips the download and, if the Whisper settings are unchanged, the transcription.">
+            <motion.span style={{ display: "inline-flex" }} animate={rerunBusy ? { rotate: 360 } : { rotate: 0 }}
+                         transition={rerunBusy ? { duration: 0.9, repeat: Infinity, ease: [0.22, 1, 0.36, 1] } : fast}>
+              <ArrowClockwise size={16} weight="bold" />
+            </motion.span>
+            <span className="ti">{rerunBusy ? "Starting" : <>Re-run <b dir="auto">{rerunTarget.title}</b> with these settings</>}</span>
+          </motion.button>
+        )}
+      </AnimatePresence>
       <InlineError message={error} icon={<WarningCircle size={18} />} />
     </motion.form>
   );

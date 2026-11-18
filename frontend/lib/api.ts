@@ -15,15 +15,17 @@ export interface Clip {
   title: string; hook: string; music_mood: string; score: number; reason: string;
   music_file: string | null; status: "pending" | "rendering" | "done";
   outputs: Record<string, Output>;
+  cut_seconds?: number;
 }
 export interface JobState {
   id: string; source: string; title: string; status: JobStatus; stage: string | null;
   progress: number; message: string; pick_method: string | null; content?: "talk" | "gameplay";
   clips: Clip[]; log: string[]; error: string | null; created: number;
+  origin?: string; rerun_of?: string;
 }
 export interface JobSummary {
   id: string; title: string; source: string; status: JobStatus; progress: number;
-  message: string; created: number; clips: number;
+  message: string; created: number; clips: number; rerun_of?: string | null;
 }
 export interface Health {
   ffmpeg: boolean; nvenc: boolean; cuda: boolean; gpu?: string | null;
@@ -36,6 +38,7 @@ export interface Settings {
   framing: string; facecam: string; content: string;
   captions: boolean; hook_text: boolean; music: boolean; music_volume: number;
   caption_style: string; zoom: string; picker: string; whisper_model: string; language: string;
+  tighten: boolean;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -48,6 +51,9 @@ export const api = {
   health: () => fetch(`${API_BASE}/api/health`).then(json<Health>),
   jobs: () => fetch(`${API_BASE}/api/jobs`).then(json<JobSummary[]>),
   job: (id: string) => fetch(`${API_BASE}/api/jobs/${id}`).then(json<JobState>),
+  rerun: (id: string, settings: Settings) => fetch(`${API_BASE}/api/jobs/${id}/rerun`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings),
+  }).then(json<{ id: string }>),
   remove: (id: string) => fetch(`${API_BASE}/api/jobs/${id}`, { method: "DELETE" }).then(json<{ deleted: string }>),
   create: (settings: Settings, source: { url?: string; file?: File }) => {
     const fd = new FormData();

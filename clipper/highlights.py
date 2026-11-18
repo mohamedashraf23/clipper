@@ -48,15 +48,16 @@ def _audio_curves(wav_path, n_bins: int) -> tuple[np.ndarray, np.ndarray]:
     return loud, burst
 
 
-def _video_curves(video_path, n_bins: int, log=print) -> tuple[np.ndarray, np.ndarray, list[float]]:
-    """Motion and brightness per bin, plus scene-cut times."""
+def _video_curves(video_path, n_bins: int, log=print) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[float]]:
+    """Motion, brightness and letterboxing per bin, plus scene-cut times."""
     cmd = [ff.find_bin("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(video_path),
            "-an", "-vf", f"fps={MOTION_FPS},scale={SMALL_W}:{SMALL_H}:flags=area,format=gray",
            "-f", "rawvideo", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     size = SMALL_W * SMALL_H
-    diffs, lum = [], []
+    diffs, lum, boxed = [], [], []
     prev = None
+    bar = max(2, SMALL_H // 9)  # ~11% of the height: where cinematic black bars sit
     while True:
         buf = proc.stdout.read(size * 64)
         if not buf:
@@ -64,21 +65,26 @@ def _video_curves(video_path, n_bins: int, log=print) -> tuple[np.ndarray, np.nd
         frames = np.frombuffer(buf[: len(buf) // size * size], np.uint8).reshape(-1, SMALL_H, SMALL_W).astype(np.float32)
         for f in frames:
             lum.append(f.mean() / 255.0)
+            # letterbox: near-black strips top and bottom with a lit picture between = cutscene framing
+            edges = max(f[:bar].mean(), f[-bar:].mean()) / 255.0
+            boxed.append(1.0 if edges < 0.035 and f[bar:-bar].mean() / 255.0 > 0.10 else 0.0)
             diffs.append(0.0 if prev is None else float(np.abs(f - prev).mean() / 255.0))
             prev = f
         if len(lum) % (MOTION_FPS * 120) < 64:
             log(f"Scanning motion {len(lum) / MOTION_FPS / 60:.0f} min", transient=True)
     proc.wait()
-    diffs, lum = np.array(diffs, np.float32), np.array(lum, np.float32)
+    diffs, lum, boxed = np.array(diffs, np.float32), np.array(lum, np.float32), np.array(boxed, np.float32)
 
     per_bin = int(MOTION_FPS * STEP)
     motion = np.zeros(n_bins, np.float32)
     bright = np.zeros(n_bins, np.float32)
+    letterbox = np.zeros(n_bins, np.float32)
     for b in range(n_bins):
         seg = slice(b * per_bin, (b + 1) * per_bin)
         if len(diffs[seg]):
             motion[b] = float(np.median(diffs[seg]))
             bright[b] = float(lum[seg].mean())
+            letterbox[b] = float(boxed[seg].mean())
 
     # scene cuts: a single frame change far above its neighbourhood
     cuts = []
@@ -88,7 +94,7 @@ def _video_curves(video_path, n_bins: int, log=print) -> tuple[np.ndarray, np.nd
             t = i / MOTION_FPS
             if not cuts or t - cuts[-1] > 1.0:
                 cuts.append(float(t))
-    return motion, bright, cuts
+    return motion, bright, letterbox, cuts
 
 
 def _z(a: np.ndarray) -> np.ndarray:
@@ -101,14 +107,19 @@ def _smooth(a: np.ndarray, seconds: float) -> np.ndarray:
     return np.convolve(a, np.ones(k) / k, mode="same")
 
 
+ANALYSIS_VERSION = 2  # bump when scoring changes so cached highlights.json files are recomputed
+
+
 def analyze(video_path, wav_path, duration: float, transcript: dict | None, cache=None, log=print) -> dict:
     if cache and cache.exists():
-        return json.loads(cache.read_text(encoding="utf-8"))
+        cached = json.loads(cache.read_text(encoding="utf-8"))
+        if cached.get("v") == ANALYSIS_VERSION:
+            return cached
     n_bins = int(np.ceil(duration / STEP))
     log("Measuring game audio")
     loud, burst = _audio_curves(wav_path, n_bins)
     log("Scanning motion and scene cuts")
-    motion, bright, cuts = _video_curves(video_path, n_bins, log)
+    motion, bright, letterbox, cuts = _video_curves(video_path, n_bins, log)
 
     speech = np.zeros(n_bins, np.float32)
     for w in all_words(transcript or {"segments": []}):
@@ -116,15 +127,26 @@ def analyze(video_path, wav_path, duration: float, transcript: dict | None, cach
         if 0 <= b < n_bins:
             speech[b] += 1
 
-    score = (0.40 * _z(_smooth(loud, 3))
-             + 0.35 * _z(_smooth(burst, 2))
-             + 0.30 * _z(_smooth(motion, 3))
-             + 0.10 * np.clip(_smooth(speech, 4) * 2, 0, 1))
+    loud_z, burst_z, motion_z = _z(_smooth(loud, 3)), _z(_smooth(burst, 2)), _z(_smooth(motion, 3))
+    talking = _smooth(speech, 3) > 0.15  # someone is speaking around this moment
+
+    # Shouting is loud too: while characters talk, loudness counts for much less than action does.
+    score = (np.where(talking, 0.15, 0.35) * loud_z
+             + np.where(talking, 0.30, 0.40) * burst_z
+             + 0.45 * motion_z)
+
+    # Cutscenes: cinematic black bars, or steady dialogue with a calm camera. Gameplay is what people clip.
+    boxed = _smooth(letterbox, 2) > 0.6
+    calm_dialogue = (_smooth(speech, 8) > 0.5) & (_smooth(motion_z, 8) < 0.45)
+    cutscene = boxed | calm_dialogue
+    score = np.where(cutscene, score * 0.4, score)
+
     dead = (_smooth(bright, 2) < 0.06) | (_smooth(motion, 3) < np.percentile(motion, 8))
     score = np.where(dead, score * 0.25, score)
-    out = {"step": STEP, "score": score.round(4).tolist(), "loud": _z(_smooth(loud, 3)).round(3).tolist(),
-           "burst": _z(_smooth(burst, 2)).round(3).tolist(), "motion": _z(_smooth(motion, 3)).round(3).tolist(),
-           "speech": speech.tolist(), "cuts": cuts}
+    out = {"v": ANALYSIS_VERSION, "step": STEP, "score": score.round(4).tolist(), "loud": loud_z.round(3).tolist(),
+           "burst": burst_z.round(3).tolist(), "motion": motion_z.round(3).tolist(),
+           "speech": speech.tolist(), "cutscene": cutscene.astype(np.int8).tolist(), "cuts": cuts}
+    log(f"Gameplay scan: {cutscene.mean() * 100:.0f}% of the video looks like cutscenes, {len(cuts)} scene cuts")
     if cache:
         cache.write_text(json.dumps(out), encoding="utf-8")
     return out
@@ -197,8 +219,8 @@ def _signals(analysis: dict, p: dict) -> dict:
 
 
 TEMPLATES = {
-    "burst": ("Big explosion moment", "Wait for the explosion", "intense cinematic action, heavy drums, distorted bass, high energy"),
-    "motion": ("High speed chase", "This chase got out of hand", "fast driving electronic beat, aggressive synths, energetic"),
+    "burst": ("Things get loud", "Wait for it", "intense cinematic action, heavy drums, distorted bass, high energy"),
+    "motion": ("Full speed moment", "This went sideways fast", "fast driving electronic beat, aggressive synths, energetic"),
     "loud": ("All out action", "Things escalate fast", "dark trap beat, heavy 808, tense and energetic"),
     "speech": ("Story moment", "This scene changes everything", "moody cinematic ambient, low strings, suspenseful"),
 }
@@ -224,7 +246,7 @@ def describe(picks: list[dict], analysis: dict, transcript: dict | None, title: 
         log(f"Local AI ({config.OLLAMA_MODEL}) writing hooks for {len(picks)} gameplay clips")
         brief = [{"id": i, "seconds": round(p["end"] - p["start"]),
                   "peak_at_second": p["peak"],
-                  "audio_intensity": round(p["_sig"]["loud"], 2), "explosion_or_gunfire": round(p["_sig"]["burst"], 2),
+                  "audio_intensity": round(p["_sig"]["loud"], 2), "sudden_loud_sounds": round(p["_sig"]["burst"], 2),
                   "on_screen_motion": round(p["_sig"]["motion"], 2), "dialogue": p["_lines"] or "(no dialogue)"}
                  for i, p in enumerate(picks)]
         schema = {"type": "object", "properties": {"clips": {"type": "array", "items": {"type": "object", "properties": {
@@ -236,7 +258,11 @@ def describe(picks: list[dict], analysis: dict, transcript: dict | None, title: 
             f"{json.dumps(brief, ensure_ascii=False)}\n\n"
             "For each clip write, in English:\n- title: 3 to 6 words\n"
             "- hook: on screen text for the first seconds, max 7 words, makes a gamer keep watching, "
-            "no hashtags, no emojis, do not invent specific events that the signals and dialogue don't support\n"
+            "no hashtags, no emojis\n"
+            "You cannot see the video. Sudden loud sounds can be a crash, an engine, a gunshot or a slammed door, "
+            "so NEVER name a specific event (explosion, shootout, chase, crash, kill) unless the dialogue mentions it. "
+            "Without dialogue, write curiosity hooks that stay true whatever happens (for example: 'Wait for the ending', "
+            "'This went sideways fast', 'Nobody expected this').\n"
             "- music_mood: 6 to 12 words describing an instrumental background track (genre, instruments, energy). "
             "Never name artists.\nReply with JSON only."
         )

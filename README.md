@@ -12,8 +12,8 @@ It works for **talking videos** (podcasts, interviews, vlogs, any language inclu
 |---|---|---|
 | 1. Import | YouTube or any yt-dlp supported link, or a local MP4, MOV, MKV or WEBM | yt-dlp, FFmpeg |
 | 2. Transcribe | Word level timestamps on the GPU, language detected automatically | faster-whisper |
-| 3. Pick clips | **Talking:** an AI reads the transcript and picks self contained moments with a hook. **Gameplay:** loudness, sudden bursts (gunfire, explosions), on screen motion and scene cuts are scored to find the action | Ollama (free, local) or Claude API, NumPy, OpenCV |
-| 4. Style | Word by word animated captions, a hook title for the first 3 seconds, punch in zoom, and an instrumental track generated for each clip that ducks under the voice | libass, MusicGen |
+| 3. Pick clips | **Talking:** an AI reads the transcript and picks self contained moments with a hook. **Gameplay:** on screen motion, sudden bursts (gunfire, explosions), loudness and scene cuts are scored to find the action; cutscenes and shouting in dialogue count for less | Ollama (free, local) or Claude API, NumPy, OpenCV |
+| 4. Style | Jump cuts that trim pauses and filler words (talking videos), word by word animated captions, a hook title for the first 3 seconds, punch in zoom, and an instrumental track generated for each clip that ducks under the voice | FFmpeg, libass, MusicGen |
 | 5. Formats | Every clip rendered in 9:16, 1:1 and 16:9 | FFmpeg, NVENC or x264 |
 | 6. Verify | Resolution, duration, audio, codec, loudness (−14 LUFS), black frames, dead air and captions. A render that fails is redone once on the CPU encoder | ffprobe, ebur128 |
 
@@ -26,6 +26,14 @@ It works for **talking videos** (podcasts, interviews, vlogs, any language inclu
 | Crop to fill, follow the face | Fills the frame, centred on the speaker |
 | Stacked: facecam on top, gameplay below | For streams with a webcam. It finds the webcam automatically or uses the corner you pick |
 | Stacked: whole frame on top, zoomed action below | For gameplay without a webcam |
+
+### Jump cuts
+
+For talking videos, pauses between 0.45 and 2.5 seconds are shortened to 0.2 seconds and filler words (um, uh, erm and common Arabic hesitations) are removed. Longer gaps are kept, since they're usually laughter or a reaction. Captions follow the new timing. Turn it off with **Cut pauses and filler words**.
+
+### Re-run with new settings
+
+Open any finished job and press **Re-run with these settings** to try another framing, caption style or clip length on the same video. Nothing is downloaded again, the video is linked rather than copied, and the transcript is reused when the Whisper model and language are unchanged.
 
 ### Who picks the clips
 
@@ -98,13 +106,12 @@ Animations respect your system's reduced motion setting.
 
 ## Output
 
-Each run gets its own folder in `jobs/<job-id>/`:
+Each run gets its own folder in the jobs folder: `jobs/` in the project, or `~/clipper-jobs` when the project sits inside a synced folder such as OneDrive or Dropbox (so the sync client doesn't upload every video). Set `CLIPPER_JOBS_DIR` in `.env` to choose another place.
 
 - `NN-title/NN-title_9x16.mp4` (plus `_1x1` and `_16x9`): the finished clips, each with a poster image
 - `transcript.json`: the word level transcript
 - `job.json`: the picks, hooks, music prompts and verify results
 
-Videos can be large. If your project folder is synced (OneDrive, Dropbox), set `CLIPPER_JOBS_DIR` in `.env` to a folder outside it.
 
 ## Project layout
 
@@ -120,7 +127,8 @@ clipper/
   ingest.py          Download or copy the video, extract audio
   transcribe.py      faster-whisper with word timestamps
   picker.py          Clip picking for talking videos (Ollama, Claude, rules)
-  highlights.py      Clip picking for gameplay (audio and motion signals)
+  highlights.py      Clip picking for gameplay (motion, audio bursts, cutscene detection)
+  tighten.py         Jump cuts: which pieces of a talking clip to keep
   captions.py        Animated ASS captions and hook titles, right to left aware
   music.py           MusicGen background tracks
   reframe.py         Face and facecam detection

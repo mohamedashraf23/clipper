@@ -1,6 +1,6 @@
 "use client";
 import { AnimatePresence, motion } from "motion/react";
-import { CaretDown, ChartBar, Clock, DownloadSimple, FilmStrip, MusicNotes } from "@phosphor-icons/react";
+import { CaretDown, ChartBar, Clock, DownloadSimple, FilmStrip, MusicNotes, Scissors } from "@phosphor-icons/react";
 import { useState } from "react";
 import { fileUrl, fmtTime, isRtl, type Clip } from "@/lib/api";
 import { EASE, fast, riseIn, spring } from "@/lib/motion";
@@ -65,6 +65,7 @@ export function ClipCard({ jobId, clip }: { jobId: string; clip: Clip }) {
             <div className="meta caption-5">
               <span><Clock size={14} /><span className="mono">{fmtTime(clip.start)} to {fmtTime(clip.end)}</span></span>
               <span className="mono">{clip.duration.toFixed(1)}s</span>
+              {!!clip.cut_seconds && <span title="Pauses and filler words removed with jump cuts"><Scissors size={14} />{clip.cut_seconds.toFixed(1)}s cut</span>}
               <span><ChartBar size={14} />Score {clip.score}</span>
               {clip.music_file && <span><MusicNotes size={14} />{clip.music_mood}</span>}
             </div>

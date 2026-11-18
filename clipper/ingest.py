@@ -1,4 +1,5 @@
 """Step 1: bring a video URL or local MP4 into the job folder."""
+import os
 import re
 import shutil
 from pathlib import Path
@@ -51,9 +52,12 @@ def ingest(source: str, job_dir: Path, log=print) -> dict:
         path = job_dir / ("source" + src.suffix.lower())
         if src.resolve() != path.resolve():
             if src.resolve().parent == job_dir.resolve():
-                src.replace(path)  # uploaded into the job folder: just rename
+                src.replace(path)  # uploaded (or linked) into the job folder: just rename
             else:
-                shutil.copyfile(src, path)
+                try:
+                    os.link(src, path)  # same drive: instant, no extra space
+                except OSError:
+                    shutil.copyfile(src, path)
         title = src.stem
 
     meta = ff.probe(path)

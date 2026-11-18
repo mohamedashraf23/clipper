@@ -8,7 +8,14 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
-JOBS_DIR = Path(os.getenv("CLIPPER_JOBS_DIR", ROOT / "jobs"))
+def _default_jobs_dir() -> Path:
+    """Videos are big. Inside a synced folder (OneDrive, Dropbox...) the sync client uploads every render
+    and locks files mid-write, so keep jobs in the home folder there instead."""
+    synced = any(s in str(ROOT).lower() for s in ("onedrive", "dropbox", "icloud", "google drive", "googledrive"))
+    return Path.home() / "clipper-jobs" if synced else ROOT / "jobs"
+
+
+JOBS_DIR = Path(os.getenv("CLIPPER_JOBS_DIR") or _default_jobs_dir())
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Output canvases per aspect ratio (width, height).

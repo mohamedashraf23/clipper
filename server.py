@@ -8,7 +8,7 @@ import webbrowser
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -88,6 +88,20 @@ async def create_job(url: str = Form(""), settings: str = Form("{}"), file: Uplo
         raise HTTPException(400, "Give a video URL or upload a file")
 
     job = pipeline.start_job(source, opts, job_id=job_id)
+    return {"id": job.id}
+
+
+@app.post("/api/jobs/{job_id}/rerun")
+def rerun(job_id: str, settings: dict = Body(default_factory=dict)):
+    """Same video, new settings: skips the download (and transcription when the model is unchanged)."""
+    st = pipeline.get_state(job_id)
+    if not st:
+        raise HTTPException(404, "No such job")
+    settings["n_clips"] = max(1, min(20, int(settings.get("n_clips", 3))))
+    try:
+        job = pipeline.rerun_job(job_id, settings)
+    except FileNotFoundError as e:
+        raise HTTPException(410, f"Can't re-run: {e}")
     return {"id": job.id}
 
 

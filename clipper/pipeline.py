@@ -1,13 +1,15 @@
 """Runs the six steps for one job and keeps job.json up to date for the web page."""
 import json
+import os
 import re
+import shutil
 import threading
 import time
 import traceback
 import uuid
 from pathlib import Path
 
-from . import captions, config, ff, highlights, ingest, music, picker, render, transcribe, verify
+from . import captions, config, ff, highlights, ingest, music, picker, render, tighten, transcribe, verify
 from .reframe import corner_box, face_center, find_facecam
 
 DEFAULTS = {
@@ -28,6 +30,7 @@ DEFAULTS = {
     "language": "",
     "picker": "auto",         # auto | claude | ollama | rules
     "content": "auto",        # auto | talk | gameplay
+    "tighten": True,          # jump cuts: shorten pauses, drop filler words (talking videos only)
 }
 GAMEPLAY_WPM = 60  # fewer spoken words per minute than this = treat as gameplay when content is "auto"
 GAME_TITLE_RE = re.compile(
@@ -189,6 +192,18 @@ class Job:
                 "duration": round(p["end"] - p["start"], 2), "music_file": None, "face": None,
                 "outputs": {}, "status": "pending",
             })
+        # jump cuts: shorten pauses and drop filler words (talking only; pauses in gameplay are action)
+        if s.get("tighten", True) and content == "talk":
+            saved = 0.0
+            for clip in self.state["clips"]:
+                segs = tighten.keep_segments(words, clip["start"], clip["end"])
+                if len(segs) > 1:
+                    clip["segments"] = segs
+                    clip["cut_seconds"] = round(clip["duration"] - tighten.total(segs), 2)
+                    clip["duration"] = tighten.total(segs)
+                    saved += clip["cut_seconds"]
+            if saved:
+                self.log(f"Jump cuts removed {saved:.1f}s of pauses and filler words")
         self.save()
         total = len(self.state["clips"])
 
@@ -239,7 +254,10 @@ class Job:
                     layout = "stack_cam" if (framing == "stack_cam" and clip["facecam"]) else "stack_zoom"
                     seam = render.stack_geometry(layout, src["width"], src["height"], w, h)[0]
                 ass = clip_dir / f"captions_{tag}.ass"
-                events = captions.build_ass(words, clip["start"], clip["end"], w, h, ass,
+                segs = clip.get("segments")
+                cap_words = tighten.remap_words(words, clip["start"], segs) if segs else words
+                cap_end = clip["start"] + clip["duration"] if segs else clip["end"]
+                events = captions.build_ass(cap_words, clip["start"], cap_end, w, h, ass,
                                             hook=clip["hook"] if s["hook_text"] else "",
                                             style=s["caption_style"], captions=s["captions"], seam_y=seam)
                 use_ass = s["captions"] or s["hook_text"]
@@ -271,7 +289,8 @@ class Job:
                                    music_volume=float(s["music_volume"]) * (0.6 if self.state.get("content") == "gameplay" else 1.0),
                                    zoom=s["zoom"], out_path=out, encoder=encoder,
                                    framing=s.get("framing", "fit"),
-                                   facecam=tuple(clip["facecam"]) if clip.get("facecam") else None)
+                                   facecam=tuple(clip["facecam"]) if clip.get("facecam") else None,
+                                   segments=[tuple(x) for x in clip["segments"]] if clip.get("segments") else None)
                 result = verify.verify_clip(out, expected_w=w, expected_h=h, expected_duration=clip["duration"],
                                             caption_events=events, captions_wanted=captions_wanted,
                                             music_wanted=bool(music_path))
@@ -296,6 +315,42 @@ def start_job(source: str, settings: dict, job_id: str | None = None) -> Job:
     return job
 
 
+def rerun_job(old_id: str, settings: dict) -> Job:
+    """New job on the same video with new settings: no download, and no transcription when the
+    Whisper model and language are unchanged. The video is hard-linked, so it costs no extra space."""
+    old_dir = config.JOBS_DIR / old_id
+    old = get_state(old_id)
+    if not old:
+        raise FileNotFoundError(old_id)
+    src = next((p for p in sorted(old_dir.glob("source.*")) if p.suffix not in (".part", ".ytdl", ".wav")), None)
+    if not src:
+        raise FileNotFoundError("The original video is no longer in that job's folder")
+
+    job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+    new_dir = config.JOBS_DIR / job_id
+    new_dir.mkdir(parents=True)
+    linked = new_dir / f"upload{src.suffix}"
+    try:
+        os.link(src, linked)
+    except OSError:
+        shutil.copyfile(src, linked)
+
+    merged = {**DEFAULTS, **settings, "title": old.get("title") or src.stem}
+    prev = {**DEFAULTS, **old.get("settings", {})}
+    if (merged["whisper_model"], merged["language"]) == (prev["whisper_model"], prev["language"]):
+        for name in ("transcript.json", "highlights.json"):
+            if (old_dir / name).exists():
+                shutil.copy2(old_dir / name, new_dir / name)
+
+    job = Job(str(linked), merged, job_id=job_id)
+    job.state["origin"] = old.get("origin") or old.get("source")  # the original link, for display
+    job.state["rerun_of"] = old_id
+    job.save()
+    _jobs[job.id] = job
+    threading.Thread(target=job.run, daemon=True, name=f"job-{job.id}").start()
+    return job
+
+
 def get_state(job_id: str) -> dict | None:
     if job_id in _jobs:
         return _jobs[job_id].state
@@ -312,6 +367,6 @@ def list_jobs() -> list[dict]:
             continue
         if st.get("status") in ("queued", "running") and p.parent.name not in _jobs:
             st["status"] = "interrupted"
-        out.append({k: st.get(k) for k in ("id", "title", "source", "status", "progress", "message", "created")}
-                   | {"clips": len(st.get("clips", []))})
+        out.append({k: st.get(k) for k in ("id", "title", "status", "progress", "message", "created", "rerun_of")}
+                   | {"source": st.get("origin") or st.get("source"), "clips": len(st.get("clips", []))})
     return out

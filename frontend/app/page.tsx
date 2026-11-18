@@ -51,6 +51,15 @@ export default function Page() {
     loadJobs();
   }
 
+  async function rerun(id: string, settings: Settings) {
+    const { id: newId } = await api.rerun(id, settings);
+    open(newId);
+    loadJobs();
+  }
+
+  const rerunTarget = job && job.status !== "running" && job.status !== "queued"
+    ? { id: job.id, title: job.title || job.origin || job.source } : null;
+
   async function remove(id: string) {
     await api.remove(id).catch(() => undefined);
     if (id === current) { setCurrent(null); setJob(null); }
@@ -63,7 +72,7 @@ export default function Page() {
       <Header health={health} />
       <main className="layout">
         <aside className="side">
-          <SettingsPanel health={health} onSubmit={create} />
+          <SettingsPanel health={health} onSubmit={create} rerunTarget={rerunTarget} onRerun={rerun} />
           <History jobs={jobs} current={current} onOpen={open} onDelete={remove} />
         </aside>
         <section id="workspace" tabIndex={-1} aria-live="polite">

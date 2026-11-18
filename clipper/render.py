@@ -72,12 +72,16 @@ def _fix_loudness(path: Path):
 def render_clip(*, source: str, src_meta: dict, start: float, end: float, out_w: int, out_h: int,
                 face: tuple[float, float] | None, ass_file: Path | None, music_file: Path | None,
                 music_volume: float, zoom: str, out_path: Path, encoder: str | None = None,
-                framing: str = "fit", facecam: tuple[int, int, int, int] | None = None) -> Path:
+                framing: str = "fit", facecam: tuple[int, int, int, int] | None = None,
+                segments: list[tuple[float, float]] | None = None) -> Path:
     """framing: 'fit' = whole video over a blurred copy of itself (nothing cut off),
     'fit_black' = whole video with black bars, 'crop' = fill the frame, centred on the face,
     'stack_cam' = facecam on top, gameplay below, 'stack_zoom' = whole frame on top, zoomed action below.
-    Stacked layouts only apply to tall outputs; other shapes fall back to 'fit'."""
-    duration = end - start
+    Stacked layouts only apply to tall outputs; other shapes fall back to 'fit'.
+    segments: pieces of the clip to keep (seconds from `start`), joined with jump cuts; None keeps it whole."""
+    span = end - start
+    cuts = bool(segments) and len(segments) > 1
+    duration = sum(e - s for s, e in segments) if cuts else span
     fps = min(60.0, src_meta["fps"] or 30.0)
     sw, sh = src_meta["width"], src_meta["height"]
     same_shape = abs(sw / sh - out_w / out_h) < 0.01
@@ -138,24 +142,40 @@ def render_clip(*, source: str, src_meta: dict, start: float, end: float, out_w:
         vf.append(f"subtitles=filename={ass_file.name}:fontsdir='C\\:/Windows/Fonts'")
     vf.append("format=yuv420p")
 
-    args = ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", source]
+    args = ["-ss", f"{start:.3f}", "-t", f"{span:.3f}", "-i", source]
     if music_file:
         args += ["-stream_loop", "-1", "-i", music_file]
+
+    # jump cuts: trim each kept piece from the (already seeked) input and join them, with 10 ms audio
+    # fades on every edge so the cuts don't click
+    pre, vin, ain = "", "[0:v]", "[0:a]"
+    if cuts:
+        n = len(segments)
+        parts = []
+        pre = f"[0:v]split={n}{''.join(f'[vs{i}]' for i in range(n))};[0:a]asplit={n}{''.join(f'[as{i}]' for i in range(n))};"
+        for i, (s, e) in enumerate(segments):
+            d = e - s
+            pre += (f"[vs{i}]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS[v{i}];"
+                    f"[as{i}]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
+                    f"afade=t=in:d=0.01,afade=t=out:st={max(0.0, d - 0.01):.3f}:d=0.01[a{i}];")
+            parts.append(f"[v{i}][a{i}]")
+        pre += f"{''.join(parts)}concat=n={n}:v=1:a=1[cv][ca];"
+        vin, ain = "[cv]", "[ca]"
 
     fade_out = max(0.0, duration - 1.5)
     if music_file:
         filt = (
-            f"[0:v]{','.join(vf)}[v];"
+            f"{pre}{vin}{','.join(vf)}[v];"
             f"[1:a]atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,volume={music_volume:.3f},"
             f"afade=t=in:st=0:d=0.8,afade=t=out:st={fade_out:.3f}:d=1.5[m];"
-            f"[0:a]aresample=48000,asplit=2[voice][sc];"
+            f"{ain}aresample=48000,asplit=2[voice][sc];"
             f"[m]aresample=48000[m48];"
             f"[m48][sc]sidechaincompress=threshold=0.02:ratio=6:attack=15:release=350[duck];"
             f"[voice][duck]amix=inputs=2:duration=first:normalize=0,"
             f"loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"
         )
     else:
-        filt = f"[0:v]{','.join(vf)}[v];[0:a]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"
+        filt = f"{pre}{vin}{','.join(vf)}[v];{ain}loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"
 
     enc = encoder or ("h264_nvenc" if ff.nvenc_works() else "libx264")
     if enc == "h264_nvenc":
