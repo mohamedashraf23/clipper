@@ -1,0 +1,14 @@
+# Install PyTorch with CUDA first (see README):
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+faster-whisper
+yt-dlp
+anthropic
+pydantic
+fastapi
+uvicorn[standard]
+python-multipart
+transformers
+scipy
+numpy
+opencv-python-headless<5   # 5.x dropped the Haar face detector used for reframing
+python-dotenv

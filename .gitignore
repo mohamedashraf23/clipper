@@ -1,0 +1,27 @@
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+.claude/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Videos, renders and per-job data (can be large and copyrighted)
+jobs/
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.part
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
