@@ -41,6 +41,7 @@ It works for **talking videos** (podcasts, interviews, vlogs, any language inclu
 - Python 3.11 or newer
 - An NVIDIA GPU with 6 GB or more is recommended. CPU works, slowly
 - FFmpeg
+- Node.js 20 or newer, to build the interface once (and when you change it)
 - Optional: [Ollama](https://ollama.com) for the free AI picker
 
 ## Setup
@@ -52,6 +53,7 @@ winget install Gyan.FFmpeg
 python -m venv .venv
 .venv\Scripts\python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
 .venv\Scripts\python -m pip install -r requirements.txt
+winget install OpenJS.NodeJS.LTS
 ```
 
 For the free AI picker:
@@ -67,13 +69,32 @@ The first run downloads the Whisper model (`small`, about 500 MB) and MusicGen s
 
 ## Run
 
-Double click `start.bat`, or:
+Double click `start.bat`. On the first run it builds the interface, then starts the server and opens http://127.0.0.1:8765. The server only listens on your own machine.
+
+To do it by hand:
 
 ```bash
+cd frontend
+npm ci
+npm run build
+cd ..
 .venv\Scripts\python server.py
 ```
 
-Then open http://127.0.0.1:8765. The server only listens on your own machine.
+## Working on the interface
+
+The interface is a Next.js app in `frontend/` (React, TypeScript, [Motion](https://motion.dev) for animation, [Phosphor](https://phosphoricons.com) icons). It's exported as static files to `frontend/out`, which `server.py` serves, so no Node server runs in normal use.
+
+For live reload while editing, keep the Python server running and start the dev server next to it:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Then open http://localhost:3000. It calls the Python API on port 8765 directly (see `frontend/.env.development`). Run `npm run build` when you're done so `start.bat` picks up the changes.
+
+Animations respect your system's reduced motion setting.
 
 ## Output
 
@@ -88,8 +109,12 @@ Videos can be large. If your project folder is synced (OneDrive, Dropbox), set `
 ## Project layout
 
 ```
-server.py            FastAPI app and API routes
-web/index.html       The interface (single page, no build step)
+server.py            FastAPI app: API routes, serves the built interface and the clips
+frontend/            Next.js interface
+  app/page.tsx       Page state and job polling
+  components/        Header, settings form, history, job view, clip cards, empty state
+  lib/api.ts         Typed client for the API
+  lib/motion.ts      Shared easing and animation presets
 clipper/
   pipeline.py        Runs the six steps for a job and keeps job.json current
   ingest.py          Download or copy the video, extract audio

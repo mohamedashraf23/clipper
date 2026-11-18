@@ -25,3 +25,6 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# safe to commit: frontend dev settings, no secrets
+!frontend/.env.development

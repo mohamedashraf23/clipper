@@ -9,7 +9,8 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from clipper import config, ff, pipeline
@@ -21,13 +22,20 @@ for _stream in (sys.stdout, sys.stderr):  # print non-English titles/transcripts
         pass
 
 app = FastAPI(title="Clipper")
-WEB = config.ROOT / "web"
+FRONTEND = config.ROOT / "frontend" / "out"   # built by `npm run build` in frontend/
 ALLOWED = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
+# the Next.js dev server (npm run dev) runs on :3000 and calls this API directly
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+                   allow_methods=["*"], allow_headers=["*"])
 
-@app.get("/")
-def index():
-    return FileResponse(WEB / "index.html")
+NOT_BUILT = """<!doctype html><meta charset=utf-8><title>Clipper</title>
+<body style="background:#000;color:#F4F4F2;font:16px/24px system-ui;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="max-width:560px;padding:24px"><h1 style="font-size:24px">The interface isn't built yet</h1>
+<p>Run <code>start.bat</code> again (it builds the page when Node.js is installed), or build it yourself:</p>
+<pre style="background:#181818;padding:12px;border-radius:8px">cd frontend
+npm ci
+npm run build</pre></div>"""
 
 
 @app.get("/api/health")
@@ -109,7 +117,14 @@ def delete_job(job_id: str):
 
 
 app.mount("/files", StaticFiles(directory=config.JOBS_DIR), name="files")
-app.mount("/static", StaticFiles(directory=WEB), name="static")
+
+if (FRONTEND / "index.html").exists():
+    # mounted last so /api and /files win; html=True serves index.html for "/"
+    app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")
+else:
+    @app.get("/", response_class=HTMLResponse)
+    def not_built():
+        return NOT_BUILT
 
 if __name__ == "__main__":
     url = f"http://{config.HOST}:{config.PORT}"
