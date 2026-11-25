@@ -3,12 +3,12 @@
 # Versions are pinned so a fresh install matches what was tested; Dependabot proposes updates.
 faster-whisper==1.2.1
 yt-dlp==2026.10.26           # sites change often: keep this one current
-anthropic==2.8.0
-pydantic==2.14.3
-fastapi==0.163.1
+anthropic==2.12.0
+pydantic==2.14.4
+fastapi==0.165.0
 uvicorn[standard]==0.54.0
-python-multipart==0.0.33
-transformers==5.23.0
+python-multipart==0.0.34
+transformers==5.24.0
 scipy==1.18.1
 numpy==2.5.5
 opencv-python-headless==4.14.0.94   # stay on 4.x: 5.x dropped the Haar face detector used for reframing
